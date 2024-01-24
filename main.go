@@ -65,9 +65,16 @@ func main() {
 func checkHelm() error {
 	_, err := exec.LookPath("helm")
 	if err != nil {
-		println("setup helm")
-		println("curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash")
-		return errors.New("Helm install docs: https://helm.sh/docs/intro/install/")
+		cmd := exec.Command("sh", "-c", "curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash")
+
+		// Set the output to os.Stdout and os.Stderr to see the installation progress
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		// Run the command
+		if cerr := cmd.Run(); cerr != nil {
+			return cerr
+		}
 	}
 	return nil
 }
@@ -75,9 +82,16 @@ func checkHelm() error {
 func checkK8s() error {
 	_, err := K8sClient()
 	if err != nil {
-		println("setup k3s")
-		println("curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644")
-		return errors.New("https://docs.k3s.io/quick-start")
+		cmd := exec.Command("sh", "-c", "curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644")
+
+		// Set the output to os.Stdout and os.Stderr to see the installation progress
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		// Run the command
+		if cerr := cmd.Run(); cerr != nil {
+			return cerr
+		}
 	}
 	return nil
 }
@@ -111,6 +125,8 @@ func initAction(cCtx *urcli.Context) error {
 	AddNamespace(ctx, k8sClient)
 	// Install NanoMQ chart
 	InstallChart("nanomq", repoName, "nanomq", nil)
+	// Install UI chart
+	InstallChart("ui", repoName, "ui", nil)
 	return nil
 }
 
@@ -223,12 +239,17 @@ func RepoUpdate() {
 	fmt.Printf("Update Complete. ⎈ Happy Helming!⎈\n")
 }
 
-// InstallChart
+// InstallChart installs the helm chart
 func InstallChart(name, repo, chart string, args map[string]string) {
 	actionConfig := new(action.Configuration)
 	if err := actionConfig.Init(settings.RESTClientGetter(), settings.Namespace(), os.Getenv("HELM_DRIVER"), debug); err != nil {
 		log.Fatal(err)
 	}
+
+	if releaseExists(name, actionConfig) {
+		return
+	}
+
 	client := action.NewInstall(actionConfig)
 
 	if client.Version == "" && client.Devel {
@@ -293,6 +314,30 @@ func InstallChart(name, repo, chart string, args map[string]string) {
 		log.Fatal(err)
 	}
 	fmt.Println(release.Manifest)
+}
+
+// Function to check if a release with the given name already exists
+func releaseExists(name string, actionConfig *action.Configuration) bool {
+	client := action.NewList(actionConfig)
+
+	// Set the namespace for listing releases
+	client.AllNamespaces = true
+	client.SetStateMask()
+
+	// List releases
+	releases, err := client.Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Check if the release with the specified name already exists
+	for _, release := range releases {
+		if release.Name == name {
+			return true
+		}
+	}
+
+	return false
 }
 
 func isChartInstallable(ch *chart.Chart) (bool, error) {
