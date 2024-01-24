@@ -36,4 +36,4 @@ jobs:
           version: latest
           args: release --rm-dist
         env:
-          GITHUB_TOKEN: ${{ secrets.OPS_GHA_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.EDGECTL_ACCESS }}

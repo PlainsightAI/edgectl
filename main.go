@@ -65,8 +65,9 @@ func main() {
 func checkHelm() error {
 	_, err := exec.LookPath("helm")
 	if err != nil {
-		println("Helm install docs: https://helm.sh/docs/intro/install/")
-		return errors.Wrap(err, "helm not installed or missing from PATH")
+		println("setup helm")
+		println("curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash")
+		return errors.New("Helm install docs: https://helm.sh/docs/intro/install/")
 	}
 	return nil
 }
@@ -74,11 +75,9 @@ func checkHelm() error {
 func checkK8s() error {
 	_, err := K8sClient()
 	if err != nil {
-		println("failed to find k8s client config")
-		println("make sure ~/.kube/config is setup properly")
-		println("to setup k3s run: curl -sfL https://get.k3s.io | sh -")
-		println("for more details: https://docs.k3s.io/quick-start")
-		return err
+		println("setup k3s")
+		println("curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644")
+		return errors.New("https://docs.k3s.io/quick-start")
 	}
 	return nil
 }
@@ -96,7 +95,7 @@ func initAction(cCtx *urcli.Context) error {
 	defer cancel()
 
 	k8sClient, err := K8sClient()
-	if err != nil {
+	if err != nil || k8sClient == nil {
 		println("failed to find k8s client config")
 		println("make sure ~/.kube/config is setup properly")
 		return err
@@ -315,31 +314,41 @@ func debug(format string, v ...interface{}) {
 func K8sClient() (*kubernetes.Clientset, error) {
 
 	var (
-		c   *rest.Config
-		err error
+		c             *rest.Config
+		err           error
+		localUserPath = filepath.Join(homeDir(), ".kube", "config")
+		k3sConfig     = "/etc/rancher/k3s/k3s.yaml"
 	)
 
-	c, err = rest.InClusterConfig()
-	if err != nil {
-		// If we err here, let assume we are running outside the cluster
-		// use the current context in kubeconfig
-		localKubeConfig := filepath.Join(homeDir(), ".kube", "config")
-		if _, err := os.Stat(localKubeConfig); errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-
-		c, err = clientcmd.BuildConfigFromFlags("", filepath.Join(homeDir(), ".kube", "config"))
+	// Check for valid Local user Config (~/.kube/config
+	_, err = os.Stat(localUserPath)
+	if err == nil {
+		c, err = clientcmd.BuildConfigFromFlags("", localUserPath)
 		if err != nil {
 			return nil, err
 		}
+		client, err := kubernetes.NewForConfig(c)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get cluster config")
+		}
+		return client, nil
 	}
 
-	client, err := kubernetes.NewForConfig(c)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get cluster config")
+	// use k3s config file instead
+	_, err = os.Stat(k3sConfig)
+	if err == nil {
+		c, err = clientcmd.BuildConfigFromFlags("", k3sConfig)
+		if err != nil {
+			return nil, err
+		}
+		client, err := kubernetes.NewForConfig(c)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get cluster config")
+		}
+		return client, nil
 	}
 
-	return client, nil
+	return nil, errors.New("failed to get kubernetes client")
 }
 
 func homeDir() string {
