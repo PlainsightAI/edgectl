@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"github.com/gofrs/flock"
@@ -65,16 +66,33 @@ func main() {
 func checkHelm() error {
 	_, err := exec.LookPath("helm")
 	if err != nil {
-		cmd := exec.Command("sh", "-c", "curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash")
-
-		// Set the output to os.Stdout and os.Stderr to see the installation progress
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		// Run the command
-		if cerr := cmd.Run(); cerr != nil {
-			return cerr
+		println("unable to find helm (kubernetes package manager)")
+		println("would you like to install helm? (Y/n)")
+		reader := bufio.NewReader(os.Stdin)
+		// ReadString will block until the delimiter is entered
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return err
 		}
+
+		// remove the delimeter from the string
+		input = strings.TrimSuffix(input, "\n")
+
+		if input == "" || strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
+			cmd := exec.Command("sh", "-c", "curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash")
+
+			// Set the output to os.Stdout and os.Stderr to see the installation progress
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+
+			// Run the command
+			if cerr := cmd.Run(); cerr != nil {
+				return cerr
+			}
+			return nil
+		}
+		println("helm is required")
+		return errors.New("please install helm and try again")
 	}
 	return nil
 }
@@ -82,17 +100,35 @@ func checkHelm() error {
 func checkK8s() error {
 	_, err := K8sClient()
 	if err != nil {
-		cmd := exec.Command("sh", "-c", "curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644")
-
-		// Set the output to os.Stdout and os.Stderr to see the installation progress
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		// Run the command
-		if cerr := cmd.Run(); cerr != nil {
-			return cerr
+		println("unable to connect to kubernetes cluster")
+		println("would you like to install k3s? (Y/n)")
+		reader := bufio.NewReader(os.Stdin)
+		// ReadString will block until the delimiter is entered
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return err
 		}
+
+		// remove the delimeter from the string
+		input = strings.TrimSuffix(input, "\n")
+
+		if input == "" || strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
+			cmd := exec.Command("sh", "-c", "curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644")
+
+			// Set the output to os.Stdout and os.Stderr to see the installation progress
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+
+			// Run the command
+			if cerr := cmd.Run(); cerr != nil {
+				return cerr
+			}
+			return nil
+		}
+		println("kubernetes is required")
+		return errors.New("please install kubernetes and try again")
 	}
+
 	return nil
 }
 
