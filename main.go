@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/gofrs/flock"
+	"github.com/nexidian/gocliselect"
 	"github.com/pkg/errors"
 	urcli "github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v2"
@@ -12,26 +13,31 @@ import (
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
-	"helm.sh/helm/v3/pkg/cli/values"
 	"helm.sh/helm/v3/pkg/downloader"
 	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/repo"
-	"helm.sh/helm/v3/pkg/strvals"
 	corev1 "k8s.io/api/core/v1"
+	v1Networking "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"log"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 )
 
-var settings *cli.EnvSettings
+var (
+	settings *cli.EnvSettings
+	src      rand.Source
+)
 
 var (
 	url       = "https://plainsightai.github.io/helm-charts/"
@@ -45,6 +51,12 @@ var (
 	date    = "unknown"
 )
 
+func init() {
+	_ = os.Setenv("HELM_NAMESPACE", namespace)
+	settings = cli.New()
+	src = rand.NewSource(time.Now().UnixNano())
+}
+
 func main() {
 	app := &urcli.App{
 		Version: version,
@@ -56,6 +68,12 @@ func main() {
 				Usage:   "initialize edge device",
 				Action:  initAction,
 			},
+			{
+				Name:    "filter-install",
+				Aliases: []string{"fi"},
+				Usage:   "install filter on device",
+				Action:  installFilterAction,
+			},
 		},
 	}
 	if err := app.Run(os.Args); err != nil {
@@ -63,9 +81,71 @@ func main() {
 	}
 }
 
+const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+const (
+	letterIdxBits = 6                    // 6 bits to represent a letter index
+	letterIdxMask = 1<<letterIdxBits - 1 // All 1-bits, as many as letterIdxBits
+	letterIdxMax  = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
+)
+
+func randString(n int) string {
+	b := make([]byte, n)
+	for i, cache, remain := n-1, src.Int63(), letterIdxMax; i >= 0; {
+		if remain == 0 {
+			cache, remain = src.Int63(), letterIdxMax
+		}
+		if idx := int(cache & letterIdxMask); idx < len(letterBytes) {
+			b[i] = letterBytes[idx]
+			i--
+		}
+		cache >>= letterIdxBits
+		remain--
+	}
+
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+func installFilterAction(cCtx *urcli.Context) error {
+	k8sClient, err := K8sClient()
+	if err != nil || k8sClient == nil {
+		println("failed to find k8s client config")
+		println("make sure ~/.kube/config is setup properly")
+		return err
+	}
+	filterMenu := gocliselect.NewMenu("Choose a Filter")
+	filterMenu.AddItem("Face Blur", "filter-blur")
+	filterChoice := filterMenu.Display()
+
+	filterVersionMenu := gocliselect.NewMenu("Choose a Filter Version")
+	filterVersionMenu.AddItem("0.1.0", "0.1.0")
+	filterVersionChoice := filterVersionMenu.Display()
+
+	println("Input your Camera RTSP Address? (example: rtsp://192.168.1.100:7447/uniqueIdHere)")
+	reader := bufio.NewReader(os.Stdin)
+	// ReadString will block until the delimiter is entered
+	rtspInput, err := reader.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	// remove the delimeter from the string
+	rtspInput = strings.TrimSuffix(rtspInput, "\n")
+
+	args := map[string]interface{}{
+		"filterName":    filterChoice,
+		"filterVersion": filterVersionChoice,
+		"deviceSource":  rtspInput,
+	}
+
+	name := fmt.Sprintf("%s-%s", filterChoice, strings.ToLower(randString(4)))
+
+	InstallChart(name, repoName, "filter", args)
+	return nil
+}
+
 func checkHelm() error {
 	_, err := exec.LookPath("helm")
 	if err != nil {
+		println("")
 		println("unable to find helm (kubernetes package manager)")
 		println("would you like to install helm? (Y/n)")
 		reader := bufio.NewReader(os.Stdin)
@@ -100,6 +180,7 @@ func checkHelm() error {
 func checkK8s() error {
 	_, err := K8sClient()
 	if err != nil {
+		println("")
 		println("unable to connect to kubernetes cluster")
 		println("would you like to install k3s? (Y/n)")
 		reader := bufio.NewReader(os.Stdin)
@@ -113,7 +194,7 @@ func checkK8s() error {
 		input = strings.TrimSuffix(input, "\n")
 
 		if input == "" || strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
-			cmd := exec.Command("sh", "-c", "curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644")
+			cmd := exec.Command("sh", "-c", "curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC=\"--docker\" sh -s - --write-kubeconfig-mode 644")
 
 			// Set the output to os.Stdout and os.Stderr to see the installation progress
 			cmd.Stdout = os.Stdout
@@ -123,12 +204,54 @@ func checkK8s() error {
 			if cerr := cmd.Run(); cerr != nil {
 				return cerr
 			}
+			_ = os.Setenv("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")
 			return nil
 		}
 		println("kubernetes is required")
 		return errors.New("please install kubernetes and try again")
 	}
 
+	return nil
+}
+
+func setupKubeConfig() error {
+
+	kubeConfigPath := filepath.Join(homeDir(), ".kube", "config")
+
+	// Set KUBECONFIG environment variable
+	if err := os.Setenv("KUBECONFIG", kubeConfigPath); err != nil {
+		return err
+	}
+
+	// Create ~/.kube directory (ignore error if it already exists)
+	if err := os.MkdirAll(filepath.Join(homeDir(), ".kube"), 0700); err != nil {
+		return err
+	}
+
+	// Run 'sudo k3s kubectl config view --raw' command
+	cmd := exec.Command("sudo", "k3s", "kubectl", "config", "view", "--raw")
+
+	// Redirect the command output to a file
+	outputFile, err := os.Create(os.Getenv("KUBECONFIG"))
+	if err != nil {
+		panic(err)
+	}
+	defer outputFile.Close()
+	cmd.Stdout = outputFile
+
+	// Run the command
+	err = cmd.Run()
+	if err != nil {
+		return err
+	}
+
+	// Change file permissions to 600
+	err = os.Chmod(kubeConfigPath, 0600)
+	if err != nil {
+		return err
+	}
+
+	println(fmt.Sprintf("KUBECONFIG generated at: %s", kubeConfigPath))
 	return nil
 }
 
@@ -151,19 +274,66 @@ func initAction(cCtx *urcli.Context) error {
 		return err
 	}
 
-	_ = os.Setenv("HELM_NAMESPACE", namespace)
-	settings = cli.New()
+	if err := setupKubeConfig(); err != nil {
+		return err
+	}
+
 	// Add helm repo
 	RepoAdd(repoName, url)
 	// Update charts from the helm repo
 	RepoUpdate()
 	// Setup Plainsight Namaespace
 	AddNamespace(ctx, k8sClient)
-	// Install NanoMQ chart
-	InstallChart("nanomq", repoName, "nanomq", nil)
-	// Install UI chart
-	InstallChart("ui", repoName, "ui", nil)
+	// Install NanoMQ
+	nanoMQ := "nanomq"
+	InstallChart(nanoMQ, repoName, nanoMQ, nil)
+	if err := InstallIngress(ctx, nanoMQ, 8083, k8sClient); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func InstallIngress(ctx context.Context, name string, port int32, k8sClient *kubernetes.Clientset) error {
+	prefixPathTyp := v1Networking.PathTypePrefix
+
+	_, err := k8sClient.NetworkingV1().Ingresses(namespace).Create(ctx, &v1Networking.Ingress{
+		TypeMeta: v1.TypeMeta{
+			Kind:       "Ingress",
+			APIVersion: "networking.k8s.io/v1",
+		},
+		ObjectMeta: v1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-ingress", name),
+			Namespace: namespace,
+		},
+		Spec: v1Networking.IngressSpec{
+			Rules: []v1Networking.IngressRule{
+				{
+					Host: fmt.Sprintf("%s.filterbox.local", name),
+					IngressRuleValue: v1Networking.IngressRuleValue{
+						HTTP: &v1Networking.HTTPIngressRuleValue{
+							Paths: []v1Networking.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &prefixPathTyp,
+									Backend: v1Networking.IngressBackend{
+										Service: &v1Networking.IngressServiceBackend{
+											Name: name,
+											Port: v1Networking.ServiceBackendPort{
+												Number: port,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}, metav1.CreateOptions{})
+
+	return err
 }
 
 func AddNamespace(ctx context.Context, client *kubernetes.Clientset) {
@@ -276,7 +446,7 @@ func RepoUpdate() {
 }
 
 // InstallChart installs the helm chart
-func InstallChart(name, repo, chart string, args map[string]string) {
+func InstallChart(name, repo, chart string, values map[string]interface{}) {
 	actionConfig := new(action.Configuration)
 	if err := actionConfig.Init(settings.RESTClientGetter(), settings.Namespace(), os.Getenv("HELM_DRIVER"), debug); err != nil {
 		log.Fatal(err)
@@ -301,16 +471,16 @@ func InstallChart(name, repo, chart string, args map[string]string) {
 	debug("CHART PATH: %s\n", cp)
 
 	p := getter.All(settings)
-	valueOpts := &values.Options{}
-	vals, err := valueOpts.MergeValues(p)
-	if err != nil {
-		log.Fatal(err)
-	}
+	//valueOpts := &values.Options{}
+	//vals, err := valueOpts.MergeValues(p)
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
 
-	// Add args
-	if err := strvals.ParseInto(args["set"], vals); err != nil {
-		log.Fatal(errors.Wrap(err, "failed parsing --set data"))
-	}
+	//// Add args
+	//if err := strvals.ParseInto(args["set"], vals); err != nil {
+	//	log.Fatal(errors.Wrap(err, "failed parsing --set data"))
+	//}
 
 	// Check chart dependencies to make sure all are present in /charts
 	chartRequested, err := loader.Load(cp)
@@ -345,7 +515,7 @@ func InstallChart(name, repo, chart string, args map[string]string) {
 	}
 
 	client.Namespace = settings.Namespace()
-	release, err := client.Run(chartRequested, vals)
+	release, err := client.Run(chartRequested, values)
 	if err != nil {
 		log.Fatal(err)
 	}
