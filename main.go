@@ -251,6 +251,9 @@ func installFilterAction(cCtx *urcli.Context) error {
 	if err != nil || k8sClient == nil {
 		return err
 	}
+
+	RepoUpdate()
+
 	filterMenu := gocliselect.NewMenu("Choose a Filter")
 	filterMenu.AddItem("Face Blur", "filter-blur")
 	filterChoice := filterMenu.Display()
