@@ -93,6 +93,12 @@ func main() {
 						Usage:   "run filter installed on device",
 						Action:  startFilterAction,
 					},
+					{
+						Name:    "uninstall",
+						Aliases: []string{"u"},
+						Usage:   "run filter installed on device",
+						Action:  uninstallFilterAction,
+					},
 				},
 			},
 		},
@@ -100,6 +106,28 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func uninstallFilterAction(ctx *urcli.Context) error {
+	k8sClient, err := K8sClient()
+	if err != nil || k8sClient == nil {
+		return err
+	}
+
+	deps, err := k8sClient.AppsV1().Deployments(namespace).List(ctx.Context, metav1.ListOptions{
+		LabelSelector: labels.Set(map[string]string{"app.kubernetes.io/name": "filter"}).String(),
+	})
+	if err != nil {
+		return err
+	}
+
+	filterMenu := gocliselect.NewMenu("Choose a Filter")
+	for _, dep := range deps.Items {
+		filterMenu.AddItem(dep.Name, dep.Name)
+	}
+	filterChoice := filterMenu.Display()
+
+	return UninstallChart(filterChoice)
 }
 
 func startFilterAction(ctx *urcli.Context) error {
@@ -558,6 +586,25 @@ func RepoUpdate() {
 	}
 	wg.Wait()
 	fmt.Printf("Update Complete. ⎈ Happy Helming!⎈\n")
+}
+
+// UninstallChart uninstalls a Helm chart
+func UninstallChart(name string) error {
+	actionConfig := new(action.Configuration)
+	if err := actionConfig.Init(settings.RESTClientGetter(), settings.Namespace(), os.Getenv("HELM_DRIVER"), debug); err != nil {
+		return err
+	}
+
+	client := action.NewUninstall(actionConfig)
+
+	// Run uninstall
+	resp, err := client.Run(name)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Chart %s uninstalled. Release status: %s\n", name, resp.Info)
+	return nil
 }
 
 // InstallChart installs the helm chart
