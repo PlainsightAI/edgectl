@@ -20,6 +20,7 @@ import (
 	v1Networking "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -35,20 +36,15 @@ import (
 )
 
 var (
+	version  = "unknown"
+	commit   = "unknown"
+	date     = "unknown"
 	settings *cli.EnvSettings
 	src      rand.Source
-)
 
-var (
 	url       = "https://plainsightai.github.io/helm-charts/"
 	repoName  = "plainsight-technologies"
 	namespace = "plainsight"
-)
-
-var (
-	version = "unknown"
-	commit  = "unknown"
-	date    = "unknown"
 )
 
 func init() {
@@ -69,16 +65,133 @@ func main() {
 				Action:  initAction,
 			},
 			{
-				Name:    "filter-install",
-				Aliases: []string{"fi"},
-				Usage:   "install filter on device",
-				Action:  installFilterAction,
+				Name:    "filter",
+				Aliases: []string{"f"},
+				Usage:   "actions for filter resource",
+				Subcommands: []*urcli.Command{
+					{
+						Name:    "install",
+						Aliases: []string{"i"},
+						Usage:   "install filter on device",
+						Action:  installFilterAction,
+					},
+					{
+						Name:    "list",
+						Aliases: []string{"l"},
+						Usage:   "list filters installed on device",
+						Action:  listFiltersAction,
+					},
+					{
+						Name:    "stop",
+						Aliases: []string{"s"},
+						Usage:   "stop filter installed on device",
+						Action:  stopFiltersAction,
+					},
+					{
+						Name:    "run",
+						Aliases: []string{"r"},
+						Usage:   "run filter installed on device",
+						Action:  startFilterAction,
+					},
+				},
 			},
 		},
 	}
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func startFilterAction(ctx *urcli.Context) error {
+	k8sClient, err := K8sClient()
+	if err != nil || k8sClient == nil {
+		return err
+	}
+
+	deps, err := k8sClient.AppsV1().Deployments(namespace).List(ctx.Context, metav1.ListOptions{
+		LabelSelector: labels.Set(map[string]string{"app.kubernetes.io/name": "filter"}).String(),
+	})
+	if err != nil {
+		return err
+	}
+
+	filterMenu := gocliselect.NewMenu("Choose a Filter")
+	for _, dep := range deps.Items {
+		filterMenu.AddItem(dep.Name, dep.Name)
+	}
+	filterChoice := filterMenu.Display()
+
+	// Fetch the deployment
+	deployment, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx.Context, filterChoice, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
+	// Scale the deployment down to zero replicas
+	deployment.Spec.Replicas = new(int32)
+	*deployment.Spec.Replicas = 1
+
+	_, err = k8sClient.AppsV1().Deployments(namespace).Update(ctx.Context, deployment, metav1.UpdateOptions{})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func stopFiltersAction(ctx *urcli.Context) error {
+	k8sClient, err := K8sClient()
+	if err != nil || k8sClient == nil {
+		return err
+	}
+
+	deps, err := k8sClient.AppsV1().Deployments(namespace).List(ctx.Context, metav1.ListOptions{
+		LabelSelector: labels.Set(map[string]string{"app.kubernetes.io/name": "filter"}).String(),
+	})
+	if err != nil {
+		return err
+	}
+
+	filterMenu := gocliselect.NewMenu("Choose a Filter")
+	for _, dep := range deps.Items {
+		filterMenu.AddItem(dep.Name, dep.Name)
+	}
+	filterChoice := filterMenu.Display()
+
+	// Fetch the deployment
+	deployment, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx.Context, filterChoice, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
+	// Scale the deployment down to zero replicas
+	deployment.Spec.Replicas = new(int32)
+	*deployment.Spec.Replicas = 0
+
+	_, err = k8sClient.AppsV1().Deployments(namespace).Update(ctx.Context, deployment, metav1.UpdateOptions{})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func listFiltersAction(ctx *urcli.Context) error {
+	k8sClient, err := K8sClient()
+	if err != nil || k8sClient == nil {
+		return err
+	}
+
+	deps, err := k8sClient.AppsV1().Deployments(namespace).List(ctx.Context, metav1.ListOptions{
+		LabelSelector: labels.Set(map[string]string{"app.kubernetes.io/name": "filter"}).String(),
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, dep := range deps.Items {
+		fmt.Println(fmt.Sprintf("%s	%v", dep.Name, dep.Status.ReadyReplicas))
+	}
+	return nil
 }
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -108,8 +221,6 @@ func randString(n int) string {
 func installFilterAction(cCtx *urcli.Context) error {
 	k8sClient, err := K8sClient()
 	if err != nil || k8sClient == nil {
-		println("failed to find k8s client config")
-		println("make sure ~/.kube/config is setup properly")
 		return err
 	}
 	filterMenu := gocliselect.NewMenu("Choose a Filter")
@@ -138,8 +249,7 @@ func installFilterAction(cCtx *urcli.Context) error {
 
 	name := fmt.Sprintf("%s-%s", filterChoice, strings.ToLower(randString(4)))
 
-	InstallChart(name, repoName, "filter", args)
-	return nil
+	return InstallChart(name, repoName, "filter", args)
 }
 
 func checkHelm() error {
@@ -236,7 +346,11 @@ func setupKubeConfig() error {
 	if err != nil {
 		panic(err)
 	}
-	defer outputFile.Close()
+	defer func() {
+		if err := outputFile.Close(); err != nil {
+			log.Fatal(err)
+		}
+	}()
 	cmd.Stdout = outputFile
 
 	// Run the command
@@ -286,11 +400,12 @@ func initAction(cCtx *urcli.Context) error {
 	AddNamespace(ctx, k8sClient)
 	// Install NanoMQ
 	nanoMQ := "nanomq"
-	InstallChart(nanoMQ, repoName, nanoMQ, nil)
+	if err := InstallChart(nanoMQ, repoName, nanoMQ, nil); err != nil {
+		return err
+	}
 	if err := InstallIngress(ctx, nanoMQ, 8083, k8sClient); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -446,14 +561,15 @@ func RepoUpdate() {
 }
 
 // InstallChart installs the helm chart
-func InstallChart(name, repo, chart string, values map[string]interface{}) {
+func InstallChart(name, repo, chart string, values map[string]interface{}) error {
 	actionConfig := new(action.Configuration)
 	if err := actionConfig.Init(settings.RESTClientGetter(), settings.Namespace(), os.Getenv("HELM_DRIVER"), debug); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	if releaseExists(name, actionConfig) {
-		return
+		println(fmt.Sprintf("%s: release already exists. SKIPPING", name))
+		return nil
 	}
 
 	client := action.NewInstall(actionConfig)
@@ -461,40 +577,33 @@ func InstallChart(name, repo, chart string, values map[string]interface{}) {
 	if client.Version == "" && client.Devel {
 		client.Version = ">0.0.0-0"
 	}
-	//name, chart, err := client.NameAndChart(args)
+
 	client.ReleaseName = name
 	cp, err := client.ChartPathOptions.LocateChart(fmt.Sprintf("%s/%s", repo, chart), settings)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	debug("CHART PATH: %s\n", cp)
 
 	p := getter.All(settings)
-	//valueOpts := &values.Options{}
-	//vals, err := valueOpts.MergeValues(p)
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
-
-	//// Add args
-	//if err := strvals.ParseInto(args["set"], vals); err != nil {
-	//	log.Fatal(errors.Wrap(err, "failed parsing --set data"))
-	//}
 
 	// Check chart dependencies to make sure all are present in /charts
 	chartRequested, err := loader.Load(cp)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	validInstallableChart, err := isChartInstallable(chartRequested)
+	if err != nil {
+		return err
+	}
 	if !validInstallableChart {
-		log.Fatal(err)
+		return fmt.Errorf("%s: chart is invalid", name)
 	}
 
 	if req := chartRequested.Metadata.Dependencies; req != nil {
-		if err := action.CheckDependencies(chartRequested, req); err != nil {
+		if derr := action.CheckDependencies(chartRequested, req); derr != nil {
 			if client.DependencyUpdate {
 				man := &downloader.Manager{
 					Out:              os.Stdout,
@@ -505,11 +614,11 @@ func InstallChart(name, repo, chart string, values map[string]interface{}) {
 					RepositoryConfig: settings.RepositoryConfig,
 					RepositoryCache:  settings.RepositoryCache,
 				}
-				if err := man.Update(); err != nil {
-					log.Fatal(err)
+				if uerr := man.Update(); uerr != nil {
+					return uerr
 				}
 			} else {
-				log.Fatal(err)
+				return derr
 			}
 		}
 	}
@@ -517,9 +626,10 @@ func InstallChart(name, repo, chart string, values map[string]interface{}) {
 	client.Namespace = settings.Namespace()
 	release, err := client.Run(chartRequested, values)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	fmt.Println(release.Manifest)
+	return nil
 }
 
 // Function to check if a release with the given name already exists
@@ -599,6 +709,8 @@ func K8sClient() (*kubernetes.Clientset, error) {
 		return client, nil
 	}
 
+	println("failed to find k8s client config")
+	println("make sure ~/.kube/config is setup properly")
 	return nil, errors.New("failed to get kubernetes client")
 }
 
