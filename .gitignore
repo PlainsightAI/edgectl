@@ -11,3 +11,4 @@ cloud-proxy
 __debug_bin
 config.json
 edgectl
+dist/
