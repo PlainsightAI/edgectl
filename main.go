@@ -4,6 +4,16 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
+	"math/rand"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+	"unsafe"
+
 	"github.com/gofrs/flock"
 	"github.com/nexidian/gocliselect"
 	"github.com/pkg/errors"
@@ -24,15 +34,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"log"
-	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"sync"
-	"time"
-	"unsafe"
 )
 
 var (
@@ -257,7 +258,7 @@ func installFilterAction(cCtx *urcli.Context) error {
 	filterMenu := gocliselect.NewMenu("Choose a Filter")
 	filterMenu.AddItem("Face Blur", "filter-blur")
 	filterMenu.AddItem("General Object Detection", "filter-object-detection")
-	filterMenu.AddItem("Po", "filter-pong")
+	filterMenu.AddItem("Pong", "filter-pong")
 	filterChoice := filterMenu.Display()
 
 	filterVersionMenu := gocliselect.NewMenu("Choose a Filter Version")
