@@ -257,6 +257,7 @@ func installFilterAction(cCtx *urcli.Context) error {
 	filterMenu := gocliselect.NewMenu("Choose a Filter")
 	filterMenu.AddItem("Face Blur", "filter-blur")
 	filterMenu.AddItem("General Object Detection", "filter-object-detection")
+	filterMenu.AddItem("Po", "filter-pong")
 	filterChoice := filterMenu.Display()
 
 	filterVersionMenu := gocliselect.NewMenu("Choose a Filter Version")
