@@ -256,13 +256,16 @@ func installFilterAction(cCtx *urcli.Context) error {
 
 	filterMenu := gocliselect.NewMenu("Choose a Filter")
 	filterMenu.AddItem("Face Blur", "filter-blur")
+	filterMenu.AddItem("General Object Detection", "filter-object-detection")
 	filterChoice := filterMenu.Display()
 
 	filterVersionMenu := gocliselect.NewMenu("Choose a Filter Version")
 	filterVersionMenu.AddItem("0.1.0", "0.1.0")
 	filterVersionChoice := filterVersionMenu.Display()
 
-	println("Input your Camera RTSP Address? (example: rtsp://192.168.1.100:7447/uniqueIdHere)")
+	println("Input your Video Source?")
+	println("this can be a device number for a USB Device (example: 0,1) ")
+	println("or this can be an RTSP Address (example: rtsp://10.100.10.20:8000/uniqueIdHere")
 	reader := bufio.NewReader(os.Stdin)
 	// ReadString will block until the delimiter is entered
 	rtspInput, err := reader.ReadString('\n')
