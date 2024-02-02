@@ -133,7 +133,8 @@ Get all pods across all namespaces to identify if the filter pod is running appr
 kubectl get pods --all-namespaces
 ```
 
-Identify the appropriate pod and note the pod name, it will be used in the next step.
+**Identify the appropriate pod and note the pod name, it will be used in the next step.**
+
 
 Once you confirm the appropriate pod is running, you can tail the logs to ensure that the filter is running appropriately and not spewing errors.
 
